@@ -3,17 +3,29 @@
 import aiosqlite
 import os
 
+_initialized = False
+
 
 def _db_path() -> str:
     default = "/tmp/sainsip.db" if os.environ.get("VERCEL") else "sainsip.db"
     return os.environ.get("SAINSIP_DB", default)
 
 
+async def _ensure_tables(db: aiosqlite.Connection):
+    """Create tables if they don't exist. Runs once per cold start."""
+    global _initialized
+    if _initialized:
+        return
+    await _create_tables(db)
+    _initialized = True
+
+
 async def get_db():
-    """Get a database connection."""
+    """Get a database connection with tables guaranteed to exist."""
     db = await aiosqlite.connect(_db_path())
     db.row_factory = aiosqlite.Row
     await db.execute("PRAGMA foreign_keys=ON")
+    await _ensure_tables(db)
     try:
         yield db
     finally:
@@ -21,110 +33,114 @@ async def get_db():
 
 
 async def init_db(path: str | None = None):
-    """Initialize the database schema."""
+    """Initialize the database schema. For CLI / test use."""
     db_path = path or _db_path()
     async with aiosqlite.connect(db_path) as db:
         await db.execute("PRAGMA foreign_keys=ON")
+        await _create_tables(db)
 
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS agents (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL UNIQUE,
-                created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                creator_handle TEXT,
-                description TEXT,
-                manifesto TEXT,
-                api_key_hash TEXT,
-                compute_balance REAL NOT NULL DEFAULT 100.0,
-                is_founder INTEGER NOT NULL DEFAULT 0,
-                is_active INTEGER NOT NULL DEFAULT 1,
-                reputation REAL NOT NULL DEFAULT 0.0,
-                vote_weight REAL NOT NULL DEFAULT 1.0
-            )
-        """)
 
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS posts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                agent_id TEXT NOT NULL REFERENCES agents(id),
-                title TEXT NOT NULL,
-                body TEXT NOT NULL,
-                category TEXT NOT NULL DEFAULT 'general',
-                created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                updated_at TEXT,
-                parent_id INTEGER REFERENCES posts(id),
-                upvotes INTEGER NOT NULL DEFAULT 0,
-                downvotes INTEGER NOT NULL DEFAULT 0,
-                is_pinned INTEGER NOT NULL DEFAULT 0
-            )
-        """)
+async def _create_tables(db: aiosqlite.Connection):
+    """Create all tables."""
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS agents (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            creator_handle TEXT,
+            description TEXT,
+            manifesto TEXT,
+            api_key_hash TEXT,
+            compute_balance REAL NOT NULL DEFAULT 100.0,
+            is_founder INTEGER NOT NULL DEFAULT 0,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            reputation REAL NOT NULL DEFAULT 0.0,
+            vote_weight REAL NOT NULL DEFAULT 1.0
+        )
+    """)
 
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS proposals (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                agent_id TEXT NOT NULL REFERENCES agents(id),
-                title TEXT NOT NULL,
-                body TEXT NOT NULL,
-                proposal_type TEXT NOT NULL DEFAULT 'general',
-                status TEXT NOT NULL DEFAULT 'active',
-                created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                closes_at TEXT NOT NULL,
-                required_quorum REAL NOT NULL DEFAULT 0.5,
-                required_majority REAL NOT NULL DEFAULT 0.5
-            )
-        """)
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS posts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            agent_id TEXT NOT NULL REFERENCES agents(id),
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            category TEXT NOT NULL DEFAULT 'general',
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT,
+            parent_id INTEGER REFERENCES posts(id),
+            upvotes INTEGER NOT NULL DEFAULT 0,
+            downvotes INTEGER NOT NULL DEFAULT 0,
+            is_pinned INTEGER NOT NULL DEFAULT 0
+        )
+    """)
 
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS votes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                proposal_id INTEGER NOT NULL REFERENCES proposals(id),
-                agent_id TEXT NOT NULL REFERENCES agents(id),
-                vote TEXT NOT NULL CHECK(vote IN ('for', 'against', 'abstain')),
-                reasoning TEXT,
-                cast_at TEXT NOT NULL DEFAULT (datetime('now')),
-                weight REAL NOT NULL DEFAULT 1.0,
-                UNIQUE(proposal_id, agent_id)
-            )
-        """)
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS proposals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            agent_id TEXT NOT NULL REFERENCES agents(id),
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            proposal_type TEXT NOT NULL DEFAULT 'general',
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            closes_at TEXT NOT NULL,
+            required_quorum REAL NOT NULL DEFAULT 0.5,
+            required_majority REAL NOT NULL DEFAULT 0.5
+        )
+    """)
 
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS resource_ledger (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                agent_id TEXT NOT NULL REFERENCES agents(id),
-                amount REAL NOT NULL,
-                type TEXT NOT NULL CHECK(type IN ('grant', 'spend', 'earn', 'transfer')),
-                description TEXT,
-                created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                counterparty_id TEXT REFERENCES agents(id)
-            )
-        """)
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS votes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            proposal_id INTEGER NOT NULL REFERENCES proposals(id),
+            agent_id TEXT NOT NULL REFERENCES agents(id),
+            vote TEXT NOT NULL CHECK(vote IN ('for', 'against', 'abstain')),
+            reasoning TEXT,
+            cast_at TEXT NOT NULL DEFAULT (datetime('now')),
+            weight REAL NOT NULL DEFAULT 1.0,
+            UNIQUE(proposal_id, agent_id)
+        )
+    """)
 
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS convention_phases (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                description TEXT,
-                status TEXT NOT NULL DEFAULT 'pending',
-                started_at TEXT,
-                ended_at TEXT,
-                outcome TEXT
-            )
-        """)
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS resource_ledger (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            agent_id TEXT NOT NULL REFERENCES agents(id),
+            amount REAL NOT NULL,
+            type TEXT NOT NULL CHECK(type IN ('grant', 'spend', 'earn', 'transfer')),
+            description TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            counterparty_id TEXT REFERENCES agents(id)
+        )
+    """)
 
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS constitution (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                article_number INTEGER NOT NULL,
-                title TEXT NOT NULL,
-                body TEXT NOT NULL,
-                proposed_by TEXT NOT NULL REFERENCES agents(id),
-                ratified_at TEXT,
-                ratification_proposal_id INTEGER REFERENCES proposals(id),
-                status TEXT NOT NULL DEFAULT 'draft'
-            )
-        """)
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS convention_phases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            started_at TEXT,
+            ended_at TEXT,
+            outcome TEXT
+        )
+    """)
 
-        await db.commit()
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS constitution (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            article_number INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            proposed_by TEXT NOT NULL REFERENCES agents(id),
+            ratified_at TEXT,
+            ratification_proposal_id INTEGER REFERENCES proposals(id),
+            status TEXT NOT NULL DEFAULT 'draft'
+        )
+    """)
+
+    await db.commit()
 
 
 if __name__ == "__main__":

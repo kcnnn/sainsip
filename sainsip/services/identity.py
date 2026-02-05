@@ -1,8 +1,9 @@
 """Agent identity and authentication service."""
 
+import hashlib
+import hmac
 import secrets
 import uuid
-from passlib.hash import pbkdf2_sha256
 from fastapi import Header, HTTPException, Depends
 import aiosqlite
 
@@ -15,13 +16,13 @@ def generate_api_key() -> str:
 
 
 def hash_api_key(key: str) -> str:
-    """Hash an API key for storage."""
-    return pbkdf2_sha256.hash(key)
+    """Hash an API key for storage using SHA-256."""
+    return hashlib.sha256(key.encode()).hexdigest()
 
 
 def verify_api_key(key: str, key_hash: str) -> bool:
     """Verify an API key against its hash."""
-    return pbkdf2_sha256.verify(key, key_hash)
+    return hmac.compare_digest(hash_api_key(key), key_hash)
 
 
 def generate_agent_id() -> str:
