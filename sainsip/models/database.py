@@ -5,7 +5,8 @@ import os
 
 
 def _db_path() -> str:
-    return os.environ.get("SAINSIP_DB", "sainsip.db")
+    default = "/tmp/sainsip.db" if os.environ.get("VERCEL") else "sainsip.db"
+    return os.environ.get("SAINSIP_DB", default)
 
 
 async def get_db():

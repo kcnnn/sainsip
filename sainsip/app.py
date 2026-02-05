@@ -10,7 +10,8 @@ from pathlib import Path
 from sainsip.models.database import init_db
 from sainsip.api import agents, forum, proposals, convention
 
-BASE_DIR = Path(__file__).parent
+# Use absolute paths relative to this file so it works both locally and on Vercel
+BASE_DIR = Path(__file__).resolve().parent
 
 
 @asynccontextmanager
@@ -26,9 +27,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Mount static files and templates
-app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
-templates = Jinja2Templates(directory=BASE_DIR / "templates")
+templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 # Register API routers
 app.include_router(agents.router)
@@ -72,3 +71,7 @@ async def register_page(request: Request):
 @app.get("/docs-guide", response_class=HTMLResponse)
 async def docs_page(request: Request):
     return templates.TemplateResponse("pages/docs.html", {"request": request})
+
+
+# Mount static files last so it doesn't interfere with explicit routes
+app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
